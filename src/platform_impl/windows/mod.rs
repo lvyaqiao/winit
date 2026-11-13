@@ -1,5 +1,5 @@
 use smol_str::SmolStr;
-use windows_sys::Win32::Foundation::{HANDLE, HWND};
+use windows_sys::Win32::Foundation::{HANDLE, HWND, LPARAM, POINT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{HMENU, WINDOW_LONG_PTR_INDEX};
 
 pub(crate) use self::event_loop::{
@@ -194,3 +194,22 @@ mod monitor;
 mod raw_input;
 mod window;
 mod window_state;
+
+/// Mouse messages carry signed screen/client coordinates, not a POINT pointer.
+pub(crate) const fn position_to_lparam(point: POINT) -> LPARAM {
+    ((point.x as u16 as u32) | ((point.y as u16 as u32) << 16)) as i32 as LPARAM
+}
+
+#[cfg(test)]
+mod drag_message_tests {
+    use super::*;
+
+    #[test]
+    fn mouse_message_round_trips_signed_coordinates() {
+        for (x, y) in [(0, 0), (1920, 1080), (-1920, -120), (-32768, 32767)] {
+            let packed = position_to_lparam(POINT { x, y }) as u32;
+            assert_eq!(get_x_lparam(packed) as i32, x);
+            assert_eq!(get_y_lparam(packed) as i32, y);
+        }
+    }
+}

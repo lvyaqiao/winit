@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::{io, panic, ptr};
 
 use windows_sys::Win32::Foundation::{
-    HWND, LPARAM, OLE_E_WRONGCOMPOBJ, POINT, POINTS, RECT, RPC_E_CHANGED_MODE, S_OK, WPARAM,
+    HWND, OLE_E_WRONGCOMPOBJ, POINT, RECT, RPC_E_CHANGED_MODE, S_OK, WPARAM,
 };
 use windows_sys::Win32::Graphics::Dwm::{
     DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR,
@@ -508,13 +508,13 @@ impl Window {
                 unsafe { GetCursorPos(&mut pos) };
                 pos
             };
-            let points = POINTS { x: points.x as i16, y: points.y as i16 };
+            let position = super::position_to_lparam(points);
 
             // ReleaseCapture needs to execute on the main thread
             unsafe { ReleaseCapture() };
 
             unsafe {
-                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, &points as *const _ as LPARAM)
+                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, position)
             };
         });
     }
