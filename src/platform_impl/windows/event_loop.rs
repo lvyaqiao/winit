@@ -976,6 +976,19 @@ fn insert_event_target_window_data(
     unsafe { super::set_window_long(thread_msg_target, GWL_USERDATA, input_ptr as isize) };
 }
 
+// Button coordinates remain authoritative when motion was coalesced or consumed by a modal loop.
+fn sync_button_position(window: HWND, userdata: &WindowData, lparam: LPARAM) {
+    let position = PhysicalPosition::new(
+        f64::from(super::get_x_lparam(lparam as u32)),
+        f64::from(super::get_y_lparam(lparam as u32)),
+    );
+    userdata.window_state_lock().mouse.last_position = Some(position);
+    userdata.send_event(Event::WindowEvent {
+        window_id: RootWindowId(WindowId(window)),
+        event: WindowEvent::CursorMoved { device_id: DEVICE_ID, position },
+    });
+}
+
 /// Capture mouse input, allowing `window` to receive mouse events when the cursor is outside of
 /// the window.
 unsafe fn capture_mouse(window: HWND, window_state: &mut WindowState) {
@@ -1797,6 +1810,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput { device_id: DEVICE_ID, state: Pressed, button: Left },
@@ -1813,6 +1827,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput { device_id: DEVICE_ID, state: Released, button: Left },
@@ -1829,6 +1844,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput { device_id: DEVICE_ID, state: Pressed, button: Right },
@@ -1845,6 +1861,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput { device_id: DEVICE_ID, state: Released, button: Right },
@@ -1861,6 +1878,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput { device_id: DEVICE_ID, state: Pressed, button: Middle },
@@ -1877,6 +1895,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput { device_id: DEVICE_ID, state: Released, button: Middle },
@@ -1894,6 +1913,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput {
@@ -1919,6 +1939,7 @@ unsafe fn public_window_callback_inner(
 
             update_modifiers(window, userdata);
 
+            sync_button_position(window, userdata, lparam);
             userdata.send_event(Event::WindowEvent {
                 window_id: RootWindowId(WindowId(window)),
                 event: MouseInput {
