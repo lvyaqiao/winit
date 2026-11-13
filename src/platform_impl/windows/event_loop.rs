@@ -32,7 +32,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Controls::{HOVER_DEFAULT, WM_MOUSELEAVE};
 use windows_sys::Win32::UI::Input::Ime::{GCS_COMPSTR, GCS_RESULTSTR, ISC_SHOWUICOMPOSITIONWINDOW};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    GetAsyncKeyState, GetCapture, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE,
+    TRACKMOUSEEVENT, VK_LBUTTON, VK_RBUTTON,
 };
 use windows_sys::Win32::UI::Input::Pointer::{
     POINTER_FLAG_DOWN, POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
@@ -44,12 +45,12 @@ use windows_sys::Win32::UI::Input::Touch::{
 use windows_sys::Win32::UI::Input::{RAWINPUT, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos,
-    GetMenu, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
+    GetForegroundWindow, GetMenu, GetSystemMetrics, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
     RegisterClassExW, RegisterWindowMessageA, SetCursor, SetWindowPos, TranslateMessage,
     CREATESTRUCTW, GIDC_ARRIVAL, GIDC_REMOVAL, GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT,
     MINMAXINFO, MNC_CLOSE, MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE, PT_PEN,
     PT_TOUCH, QS_ALLINPUT, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL, SC_MINIMIZE, SC_RESTORE,
-    SIZE_MAXIMIZED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WHEEL_DELTA, WINDOWPOS,
+    SIZE_MAXIMIZED, SM_SWAPBUTTON, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WHEEL_DELTA, WINDOWPOS,
     WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
     WMSZ_TOPRIGHT, WM_CAPTURECHANGED, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
     WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
@@ -897,6 +898,8 @@ static EXEC_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::ExecMsg\0");
 // Message sent by a `Window` when it wants to be destroyed by the main thread.
 // WPARAM and LPARAM are unused.
 pub(crate) static DESTROY_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::DestroyMsg\0");
+// WPARAM is the hit test; LPARAM contains packed screen coordinates.
+pub(crate) static DRAG_MSG_ID: LazyMessageId = LazyMessageId::new("Winit::StartWindowDrag\0");
 // WPARAM is a bool specifying the `WindowFlags::MARKER_RETAIN_STATE_ON_SIZE` flag. See the
 // documentation in the `window_state` module for more information.
 pub(crate) static SET_RETAIN_STATE_ON_SIZE_MSG_ID: LazyMessageId =
@@ -1206,15 +1209,22 @@ unsafe fn public_window_callback_inner(
         },
 
         WM_EXITSIZEMOVE => {
-            let mut state = userdata.window_state_lock();
-            if state.dragging {
-                state.dragging = false;
-                unsafe { PostMessageW(window, WM_LBUTTONUP, 0, lparam) };
+            let dragging = {
+                let mut state = userdata.window_state_lock();
+                state.set_window_flags_in_place(|f| f.remove(WindowFlags::MARKER_IN_SIZE_MOVE));
+                mem::take(&mut state.dragging)
+            };
+            if dragging {
+                let mut point: POINT = unsafe { mem::zeroed() };
+                if unsafe { GetCursorPos(&mut point) } == 0
+                    || unsafe { ScreenToClient(window, &mut point) } == 0
+                {
+                    point = POINT { x: 0, y: 0 };
+                }
+                unsafe { PostMessageW(window, WM_LBUTTONUP, 0, super::position_to_lparam(point)) };
             }
-
-            state.set_window_flags_in_place(|f| f.remove(WindowFlags::MARKER_IN_SIZE_MOVE));
             result = ProcResult::Value(0);
-        },
+        }
 
         WM_NCLBUTTONDOWN => {
             if wparam == HTCAPTION as _ {
@@ -2442,7 +2452,28 @@ unsafe fn public_window_callback_inner(
         },
 
         _ => {
-            if msg == DESTROY_MSG_ID.get() {
+            if msg == DRAG_MSG_ID.get() {
+                let pending = userdata.window_state_lock().dragging;
+                let primary = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0 {
+                    VK_RBUTTON
+                } else {
+                    VK_LBUTTON
+                };
+                let still_pressed = unsafe { GetAsyncKeyState(primary as i32) } < 0;
+                let owns_press =
+                    unsafe { GetCapture() == window || GetForegroundWindow() == window };
+                if pending && still_pressed && owns_press {
+                    // No state lock may cross capture changes or the reentrant modal loop.
+                    unsafe { ReleaseCapture() };
+                    if wparam == HTCAPTION as _ {
+                        unsafe { PostMessageW(window, WM_MOUSEMOVE, 0, 0) };
+                    }
+                    unsafe { DefWindowProcW(window, WM_NCLBUTTONDOWN, wparam, lparam) };
+                }
+                // DefWindowProc may return without ever sending WM_EXITSIZEMOVE.
+                userdata.window_state_lock().dragging = false;
+                result = ProcResult::Value(0);
+            } else if msg == DESTROY_MSG_ID.get() {
                 unsafe { DestroyWindow(window) };
                 result = ProcResult::Value(0);
             } else if msg == SET_RETAIN_STATE_ON_SIZE_MSG_ID.get() {

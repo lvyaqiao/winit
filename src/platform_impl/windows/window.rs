@@ -25,7 +25,7 @@ use windows_sys::Win32::System::Com::{
 };
 use windows_sys::Win32::System::Ole::{OleInitialize, RegisterDragDrop};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetActiveWindow, MapVirtualKeyW, ReleaseCapture, SendInput, ToUnicode, INPUT,
+    EnableWindow, GetActiveWindow, MapVirtualKeyW, SendInput, ToUnicode, INPUT,
     INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC,
     VIRTUAL_KEY, VK_LMENU, VK_MENU, VK_SPACE,
 };
@@ -41,7 +41,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     HTTOPLEFT, HTTOPRIGHT, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
     PM_NOREMOVE, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SM_DIGITIZER,
     SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, TPM_LEFTALIGN, TPM_RETURNCMD,
-    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WNDCLASSEXW,
+    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_SYSCOMMAND, WNDCLASSEXW,
 };
 
 use tracing::warn;
@@ -59,7 +59,7 @@ use crate::platform_impl::platform::dpi::{
     dpi_to_scale_factor, enable_non_client_dpi_scaling, hwnd_dpi,
 };
 use crate::platform_impl::platform::drop_handler::FileDropHandler;
-use crate::platform_impl::platform::event_loop::{self, ActiveEventLoop, DESTROY_MSG_ID};
+use crate::platform_impl::platform::event_loop::{self, ActiveEventLoop, DESTROY_MSG_ID, DRAG_MSG_ID};
 use crate::platform_impl::platform::icon::{self, IconType, WinCursor};
 use crate::platform_impl::platform::ime::ImeContext;
 use crate::platform_impl::platform::keyboard::KeyEventBuilder;
@@ -489,43 +489,36 @@ impl Window {
         Ok(())
     }
 
-    unsafe fn handle_os_dragging(&self, wparam: WPARAM) {
-        let window = self.window;
-        let window_state = self.window_state.clone();
-
-        self.thread_executor.execute_in_thread(move || {
-            {
-                let mut guard = window_state.lock().unwrap();
-                if !guard.dragging {
-                    guard.dragging = true;
-                } else {
-                    return;
-                }
-            }
-
-            let points = {
-                let mut pos = unsafe { mem::zeroed() };
-                unsafe { GetCursorPos(&mut pos) };
-                pos
-            };
-            let position = super::position_to_lparam(points);
-
-            // ReleaseCapture needs to execute on the main thread
-            unsafe { ReleaseCapture() };
-
-            unsafe {
-                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, position)
-            };
-        });
+    unsafe fn handle_os_dragging(&self, wparam: WPARAM) -> Result<(), ExternalError> {
+        let mut point: POINT = unsafe { mem::zeroed() };
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            return Err(ExternalError::Os(os_error!(io::Error::last_os_error())));
+        }
+        let message = DRAG_MSG_ID.get();
+        let mut state = self.window_state_lock();
+        if state.dragging {
+            return Ok(());
+        }
+        state.dragging = true;
+        // Defer capture handoff until the owner thread checks that this press is still current.
+        if unsafe {
+            PostMessageW(
+                self.window,
+                message,
+                wparam,
+                super::position_to_lparam(point),
+            )
+        } == 0
+        {
+            state.dragging = false;
+            return Err(ExternalError::Os(os_error!(io::Error::last_os_error())));
+        }
+        Ok(())
     }
 
     #[inline]
     pub fn drag_window(&self) -> Result<(), ExternalError> {
-        unsafe {
-            self.handle_os_dragging(HTCAPTION as WPARAM);
-        }
-
-        Ok(())
+        unsafe { self.handle_os_dragging(HTCAPTION as WPARAM) }
     }
 
     #[inline]
@@ -540,10 +533,8 @@ impl Window {
                 ResizeDirection::SouthEast => HTBOTTOMRIGHT,
                 ResizeDirection::SouthWest => HTBOTTOMLEFT,
                 ResizeDirection::West => HTLEFT,
-            } as WPARAM);
+            } as WPARAM)
         }
-
-        Ok(())
     }
 
     unsafe fn handle_showing_window_menu(&self, position: Position) {
