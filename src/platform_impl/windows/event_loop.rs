@@ -2337,7 +2337,10 @@ unsafe fn public_window_callback_inner(
             }
 
             let new_outer_rect: RECT;
-            {
+            if dragging_window {
+                // Preserve Windows' live-drag rectangle to avoid mixed-DPI feedback.
+                new_outer_rect = suggested_rect;
+            } else {
                 let suggested_ul =
                     (suggested_rect.left + margin_left, suggested_rect.top + margin_top);
 
@@ -2351,29 +2354,6 @@ unsafe fn public_window_callback_inner(
                 conservative_rect = window_flags
                     .adjust_rect(window, conservative_rect)
                     .unwrap_or(conservative_rect);
-
-                // If we're dragging the window, offset the window so that the cursor's
-                // relative horizontal position in the title bar is preserved.
-                if dragging_window {
-                    let bias = {
-                        let cursor_pos = {
-                            let mut pos = unsafe { mem::zeroed() };
-                            unsafe { GetCursorPos(&mut pos) };
-                            pos
-                        };
-                        let suggested_cursor_horizontal_ratio = (cursor_pos.x - suggested_rect.left)
-                            as f64
-                            / (suggested_rect.right - suggested_rect.left) as f64;
-
-                        (cursor_pos.x
-                            - (suggested_cursor_horizontal_ratio
-                                * (conservative_rect.right - conservative_rect.left) as f64)
-                                as i32)
-                            - conservative_rect.left
-                    };
-                    conservative_rect.left += bias;
-                    conservative_rect.right += bias;
-                }
 
                 // Check to see if the new window rect is on the monitor with the new DPI factor.
                 // If it isn't, offset the window so that it is.
