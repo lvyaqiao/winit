@@ -15,6 +15,7 @@ repository.workspace = true
 license.workspace = true
 edition.workspace = true
 include = [
+    "/PATCHES.md",
     "/build.rs",
     "/docs",
     "/examples",
@@ -86,7 +87,7 @@ cfg_aliases = "0.2.1"
 [dependencies]
 bitflags = "2"
 cursor-icon = "1.1.0"
-dpi = { version = "0.1.1", path = "dpi" }
+dpi = { version = "0.1.1" }
 rwh_04 = { package = "raw-window-handle", version = "0.4", optional = true }
 rwh_05 = { package = "raw-window-handle", version = "0.5.2", features = [
     "std",
